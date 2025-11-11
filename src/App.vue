@@ -1,25 +1,19 @@
 <script setup lang="ts">
-import { RouterLink, RouterView } from 'vue-router'
 import TodoList from './components/TodoList.vue'
 </script>
 
 <template>
-  <header>
-    <img alt="Vue logo" class="logo" src="@/assets/logo.svg" width="100" height="100" />
-
-    <div class="wrapper">
-      <TodoList />
-
-      <nav>
-        <RouterLink to="/">Home</RouterLink>
-        <RouterLink to="/about">About</RouterLink>
-      </nav>
-    </div>
-  </header>
-
-  <RouterView />
+  <main>
+    <TodoList />
+  </main>
 </template>
 
 <style scoped>
-/* dein bestehendes CSS kannst du behalten */
+main {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 100vh;
+  background-color: #f9f9f9;
+}
 </style>

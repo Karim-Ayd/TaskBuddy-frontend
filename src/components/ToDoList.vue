@@ -1,16 +1,14 @@
-<script setup>
-import { ref } from 'vue'
+<script setup lang="ts">
+import { ref, onMounted } from 'vue'
 
-// Liste der Aufgaben
+// ===== Aufgabenverwaltung =====
 const tasks = ref([
   { id: 1, title: 'Vue-Projekt starten', done: false },
   { id: 2, title: 'Erste Komponente bauen', done: true },
 ])
 
-// Eingabefeld für neue Aufgabe
 const newTask = ref('')
 
-// Neue Aufgabe hinzufügen
 function addTask() {
   if (newTask.value.trim() === '') return
   tasks.value.push({
@@ -21,15 +19,32 @@ function addTask() {
   newTask.value = ''
 }
 
-// Aufgabe löschen
-function deleteTask(id) {
+function deleteTask(id: number) {
   tasks.value = tasks.value.filter(task => task.id !== id)
 }
+
+// ===== Verbindung zum Backend =====
+const backendMessage = ref('Lade Nachricht vom Server...')
+
+onMounted(async () => {
+  try {
+    const response = await fetch('https://taskbuddy2-6.onrender.com/TaskBuddy')
+    const text = await response.text()
+    console.log('Antwort vom Backend:', text)
+    backendMessage.value = text
+  } catch (error) {
+    console.error('Fehler beim Laden der Backend-Daten:', error)
+    backendMessage.value = 'Server nicht erreichbar 😢'
+  }
+})
 </script>
 
 <template>
   <section class="todo">
     <h2>📝 TaskBuddy – Meine Aufgaben</h2>
+
+    <!-- Backend Nachricht -->
+    <p class="backend">{{ backendMessage }}</p>
 
     <!-- Neue Aufgabe hinzufügen -->
     <div class="input-row">
@@ -65,6 +80,12 @@ function deleteTask(id) {
 }
 h2 {
   text-align: center;
+  margin-bottom: 1rem;
+}
+.backend {
+  text-align: center;
+  color: #42b883;
+  font-weight: bold;
   margin-bottom: 1rem;
 }
 .input-row {
