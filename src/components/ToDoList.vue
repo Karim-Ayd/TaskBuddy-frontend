@@ -28,7 +28,7 @@ const backendMessage = ref('Lade Nachricht vom Server...')
 
 onMounted(async () => {
   try {
-    const response = await fetch('https://taskbuddy2-6.onrender.com/TaskBuddy')
+    const response = await fetch('https://taskbuddy2-v8fn.onrender.com/TaskBuddy')
     const text = await response.text()
     console.log('Antwort vom Backend:', text)
     backendMessage.value = text
