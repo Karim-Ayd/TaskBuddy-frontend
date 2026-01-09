@@ -1,5 +1,7 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+console.log("MODE:", import.meta.env.MODE);
+console.log("BASE:", import.meta.env.VITE_API_BASE_URL);
 
 type Filter = "all" | "active" | "done";
 type BackendStatus = "loading" | "ok" | "error";
@@ -8,18 +10,18 @@ type Task = {
   id: number;
   title: string;
   done: boolean;
-  createdAt: number;
+  createdAt: number; // ms timestamp
 };
 
-const STORAGE_KEY = "taskbuddy_tasks_v2";
-const BACKEND_URL = "https://taskbuddy2-v8fn.onrender.com/TaskBuddy";
+const STORAGE_KEY = "taskbuddy_tasks_cache_v1";
 
-// ===== State =====
-const tasks = ref<Task[]>([
-  { id: 1, title: "Vue-Projekt starten", done: false, createdAt: Date.now() - 86400000 },
-  { id: 2, title: "Erste Komponente bauen", done: true, createdAt: Date.now() - 3600000 },
-]);
+// Base URL (lokal / prod über .env)
+const API_BASE = String(import.meta.env.VITE_API_BASE_URL || "").replace(/\/$/, "");
+const TODOS_URL = `${API_BASE}/api/todos`;
+const PING_URL = `${API_BASE}/TaskBuddy`;
 
+// ===== UI State =====
+const tasks = ref<Task[]>([]);
 const newTask = ref("");
 const filter = ref<Filter>("all");
 
@@ -32,154 +34,108 @@ const editingId = ref<number | null>(null);
 const editValue = ref("");
 const editInputRef = ref<HTMLInputElement | null>(null);
 
-// Undo toast
+// Toast + Undo
 const toastOpen = ref(false);
 const toastMessage = ref("");
-let undoTimer: number | null = null;
-let lastDeleted: { task: Task; index: number } | null = null;
+let toastTimer: number | null = null;
 
-const canUndo = computed(() => lastDeleted !== null);
+// Für Undo: wir löschen erst nach Delay wirklich im Backend
+let pendingDeleteTimer: number | null = null;
+let pendingDelete: { task: Task; index: number } | null = null;
 
 // ===== Helpers =====
 function uid() {
   return Date.now() + Math.floor(Math.random() * 1000);
 }
 
-/** Safe parse without `any` (fixes ESLint no-explicit-any) */
-function safeParseTasks(raw: string | null): Task[] | null {
-  if (!raw) return null;
-
-  try {
-    const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return null;
-
-    const cleaned: Task[] = [];
-
-    for (const item of parsed) {
-      if (typeof item !== "object" || item === null) continue;
-      const obj = item as Record<string, unknown>;
-
-      if (typeof obj.id !== "number") continue;
-      if (typeof obj.title !== "string") continue;
-
-      cleaned.push({
-        id: obj.id,
-        title: obj.title,
-        done: typeof obj.done === "boolean" ? obj.done : false,
-        createdAt: typeof obj.createdAt === "number" ? obj.createdAt : Date.now(),
-      });
-    }
-
-    return cleaned;
-  } catch {
-    return null;
-  }
-}
-
-function loadTasks() {
-  const loaded = safeParseTasks(localStorage.getItem(STORAGE_KEY));
-  if (loaded && loaded.length > 0) tasks.value = loaded;
-}
-
-function saveTasks() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value));
-}
-
 function formatDate(ts: number) {
   return new Date(ts).toLocaleDateString();
-}
-
-function closeToast() {
-  toastOpen.value = false;
-  toastMessage.value = "";
-  if (undoTimer) {
-    window.clearTimeout(undoTimer);
-    undoTimer = null;
-  }
-  lastDeleted = null;
 }
 
 function showToast(msg: string) {
   toastOpen.value = true;
   toastMessage.value = msg;
-
-  if (undoTimer) window.clearTimeout(undoTimer);
-  undoTimer = window.setTimeout(() => closeToast(), 5500);
+  if (toastTimer) window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => {
+    toastOpen.value = false;
+    toastMessage.value = "";
+  }, 5500);
 }
 
-// ===== CRUD =====
-function addTask() {
-  const title = newTask.value.trim();
-  if (!title) return;
-
-  tasks.value.unshift({
-    id: uid(),
-    title,
-    done: false,
-    createdAt: Date.now(),
-  });
-
-  newTask.value = "";
-}
-
-function toggleDone(id: number) {
-  const t = tasks.value.find((x) => x.id === id);
-  if (t) t.done = !t.done;
-}
-
-/** Fixes TS2322 + 'removed possibly undefined' */
-function deleteTask(id: number) {
-  const idx = tasks.value.findIndex((t) => t.id === id);
-  if (idx === -1) return;
-
-  const removedArr = tasks.value.splice(idx, 1);
-  const removed = removedArr[0];
-  if (!removed) return;
-
-  lastDeleted = { task: removed, index: idx };
-  showToast(`Task gelöscht: “${removed.title}”`);
-}
-
-function undoDelete() {
-  if (!lastDeleted) return;
-  tasks.value.splice(lastDeleted.index, 0, lastDeleted.task);
-  closeToast();
-}
-
-function clearCompleted() {
-  const had = tasks.value.some((t) => t.done);
-  if (!had) return;
-  tasks.value = tasks.value.filter((t) => !t.done);
-  showToast("Erledigte Tasks entfernt");
-}
-
-// ===== Inline Edit =====
-async function startEdit(task: Task) {
-  editingId.value = task.id;
-  editValue.value = task.title;
-
-  await nextTick();
-  editInputRef.value?.focus();
-  editInputRef.value?.select();
-}
-
-function cancelEdit() {
-  editingId.value = null;
-  editValue.value = "";
-}
-
-function commitEdit(task: Task) {
-  const nextTitle = editValue.value.trim();
-  if (!nextTitle) {
-    cancelEdit();
-    return;
+function closeToast() {
+  toastOpen.value = false;
+  toastMessage.value = "";
+  if (toastTimer) {
+    window.clearTimeout(toastTimer);
+    toastTimer = null;
   }
-  task.title = nextTitle;
-  cancelEdit();
 }
 
-// ===== Backend =====
-async function fetchBackend() {
+// cache (falls Backend mal down ist)
+function saveCache() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value));
+}
+function loadCache(): Task[] {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as Task[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((t) => t && typeof t.id === "number" && typeof t.title === "string")
+      .map((t) => ({
+        id: t.id,
+        title: String(t.title),
+        done: Boolean(t.done),
+        createdAt: typeof (t as any).createdAt === "number" ? (t as any).createdAt : Date.now(),
+      }));
+  } catch {
+    return [];
+  }
+}
+
+// ===== API =====
+async function apiGetTodos(): Promise<Task[]> {
+  const res = await fetch(TODOS_URL, { method: "GET" });
+  if (!res.ok) throw new Error(`GET failed (${res.status})`);
+  const data = (await res.json()) as Array<{ id: number; title: string; done: boolean; createdAt?: number | null }>;
+  return data.map((t) => ({
+    id: t.id,
+    title: t.title,
+    done: t.done,
+    createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now(),
+  }));
+}
+
+async function apiCreateTodo(payload: Omit<Task, "id">): Promise<Task> {
+  const res = await fetch(TODOS_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) throw new Error(`POST failed (${res.status})`);
+  const t = (await res.json()) as { id: number; title: string; done: boolean; createdAt?: number | null };
+  return { id: t.id, title: t.title, done: t.done, createdAt: typeof t.createdAt === "number" ? t.createdAt : payload.createdAt };
+}
+
+async function apiUpdateTodo(id: number, patch: Partial<Pick<Task, "title" | "done">>): Promise<Task> {
+  const res = await fetch(`${TODOS_URL}/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new Error(`PUT failed (${res.status})`);
+  const t = (await res.json()) as { id: number; title: string; done: boolean; createdAt?: number | null };
+  return { id: t.id, title: t.title, done: t.done, createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now() };
+}
+
+async function apiDeleteTodo(id: number): Promise<void> {
+  const res = await fetch(`${TODOS_URL}/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(`DELETE failed (${res.status})`);
+}
+
+// Backend Badge/Ping
+async function fetchBackendBadge() {
   backendStatus.value = "loading";
   backendMessage.value = "";
 
@@ -187,7 +143,7 @@ async function fetchBackend() {
     const controller = new AbortController();
     const t = window.setTimeout(() => controller.abort(), 8000);
 
-    const res = await fetch(BACKEND_URL, { method: "GET", signal: controller.signal });
+    const res = await fetch(PING_URL, { method: "GET", signal: controller.signal });
     window.clearTimeout(t);
 
     if (!res.ok) {
@@ -196,13 +152,178 @@ async function fetchBackend() {
       return;
     }
 
-    const text = await res.text();
+    const text = (await res.text()).trim();
     backendStatus.value = "ok";
-    backendMessage.value = (text || "Online").trim();
+    backendMessage.value = text || "Online";
   } catch {
     backendStatus.value = "error";
     backendMessage.value = "Offline";
   }
+}
+
+// ===== CRUD (optimistisch) =====
+async function loadFromBackend() {
+  try {
+    const data = await apiGetTodos();
+    tasks.value = data;
+  } catch {
+    // fallback cache
+    tasks.value = loadCache();
+    showToast("Backend nicht erreichbar — Cache geladen");
+  }
+}
+
+async function addTask() {
+  const title = newTask.value.trim();
+  if (!title) return;
+
+  const tempId = -uid(); // temporär negativ
+  const optimistic: Task = {
+    id: tempId,
+    title,
+    done: false,
+    createdAt: Date.now(),
+  };
+
+  tasks.value.unshift(optimistic);
+  newTask.value = "";
+
+  try {
+    const saved = await apiCreateTodo({ title: optimistic.title, done: false, createdAt: optimistic.createdAt });
+    // replace temp
+    const idx = tasks.value.findIndex((t) => t.id === tempId);
+    if (idx !== -1) tasks.value.splice(idx, 1, saved);
+  } catch {
+    // rollback
+    tasks.value = tasks.value.filter((t) => t.id !== tempId);
+    showToast("Konnte Task nicht speichern (Backend offline?)");
+  }
+}
+
+async function toggleDone(id: number) {
+  const t = tasks.value.find((x) => x.id === id);
+  if (!t) return;
+
+  const prev = t.done;
+  t.done = !t.done;
+
+  // temp ids nicht updaten (noch nicht gespeichert)
+  if (id < 0) return;
+
+  try {
+    const updated = await apiUpdateTodo(id, { done: t.done });
+    t.title = updated.title;
+    t.done = updated.done;
+  } catch {
+    t.done = prev;
+    showToast("Update fehlgeschlagen");
+  }
+}
+
+function scheduleBackendDelete(id: number) {
+  // in case another delete is pending, execute it now
+  if (pendingDeleteTimer) {
+    window.clearTimeout(pendingDeleteTimer);
+    pendingDeleteTimer = null;
+  }
+
+  pendingDeleteTimer = window.setTimeout(async () => {
+    if (!pendingDelete) return;
+    const realId = pendingDelete.task.id;
+    pendingDelete = null;
+
+    if (realId < 0) return; // war nur temp
+    try {
+      await apiDeleteTodo(realId);
+    } catch {
+      showToast("Backend-Löschen fehlgeschlagen");
+    }
+  }, 5000);
+}
+
+function deleteTask(id: number) {
+  const idx = tasks.value.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+
+  const removed = tasks.value[idx];
+  tasks.value.splice(idx, 1);
+
+  // pending delete merken + delay (Undo möglich)
+  pendingDelete = { task: removed, index: idx };
+  scheduleBackendDelete(id);
+
+  showToast(`Task gelöscht: “${removed.title}” (Undo möglich)`);
+}
+
+function undoDelete() {
+  if (!pendingDelete) return;
+
+  // cancel backend delete
+  if (pendingDeleteTimer) {
+    window.clearTimeout(pendingDeleteTimer);
+    pendingDeleteTimer = null;
+  }
+
+  tasks.value.splice(pendingDelete.index, 0, pendingDelete.task);
+  pendingDelete = null;
+
+  showToast("Wiederhergestellt ✅");
+}
+
+async function commitEdit(task: Task) {
+  const nextTitle = editValue.value.trim();
+  if (!nextTitle) {
+    cancelEdit();
+    return;
+  }
+
+  const prevTitle = task.title;
+  task.title = nextTitle;
+  cancelEdit();
+
+  if (task.id < 0) return;
+
+  try {
+    const updated = await apiUpdateTodo(task.id, { title: nextTitle, done: task.done });
+    task.title = updated.title;
+    task.done = updated.done;
+  } catch {
+    task.title = prevTitle;
+    showToast("Edit speichern fehlgeschlagen");
+  }
+}
+
+async function clearCompleted() {
+  const doneTasks = tasks.value.filter((t) => t.done);
+  if (doneTasks.length === 0) return;
+
+  // optimistisch: UI sofort
+  const prev = [...tasks.value];
+  tasks.value = tasks.value.filter((t) => !t.done);
+
+  try {
+    // delete done in backend (serial für simplicity)
+    for (const t of doneTasks) {
+      if (t.id > 0) await apiDeleteTodo(t.id);
+    }
+    showToast("Erledigte Tasks entfernt");
+  } catch {
+    tasks.value = prev;
+    showToast("Clear done fehlgeschlagen");
+  }
+}
+
+// ===== Inline Edit =====
+async function startEdit(task: Task) {
+  editingId.value = task.id;
+  editValue.value = task.title;
+  await nextTick();
+  editInputRef.value?.focus();
+  editInputRef.value?.select();
+}
+function cancelEdit() {
+  editingId.value = null;
+  editValue.value = "";
 }
 
 // ===== Derived =====
@@ -222,25 +343,27 @@ const emptyText = computed(() => {
   return "Noch keine Tasks — leg los 🚀";
 });
 
-// ===== Lifecycle =====
-onMounted(() => {
-  loadTasks();
-  fetchBackend();
-});
-
-watch(tasks, () => saveTasks(), { deep: true });
-
+// ESC cancels edit / closes toast
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     if (editingId.value !== null) cancelEdit();
     else if (toastOpen.value) closeToast();
   }
 }
-window.addEventListener("keydown", onKeydown);
+
+// ===== Lifecycle =====
+onMounted(async () => {
+  await loadFromBackend();
+  await fetchBackendBadge();
+  window.addEventListener("keydown", onKeydown);
+});
+
+watch(tasks, () => saveCache(), { deep: true });
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
-  if (undoTimer) window.clearTimeout(undoTimer);
+  if (toastTimer) window.clearTimeout(toastTimer);
+  if (pendingDeleteTimer) window.clearTimeout(pendingDeleteTimer);
 });
 </script>
 
@@ -268,7 +391,7 @@ onBeforeUnmount(() => {
             <span class="backendText">{{ backendMessage }}</span>
           </span>
 
-          <button class="retry" type="button" @click="fetchBackend" :disabled="backendStatus === 'loading'">
+          <button class="retry" type="button" @click="fetchBackendBadge" :disabled="backendStatus === 'loading'">
             Retry
           </button>
         </div>
@@ -323,20 +446,19 @@ onBeforeUnmount(() => {
                   @blur="commitEdit(task)"
                 />
               </template>
-
               <template v-else>
                 <p class="text" :title="task.title">{{ task.title }}</p>
                 <p class="meta">{{ task.done ? "Erledigt" : "Offen" }} • {{ formatDate(task.createdAt) }}</p>
               </template>
             </div>
 
-            <button class="iconBtn" type="button" @click="deleteTask(task.id)" aria-label="delete">🗑</button>
+            <button class="iconBtn" type="button" @click="deleteTask(task.id)" aria-label="delete">
+              🗑
+            </button>
           </li>
         </transition-group>
 
-        <p v-if="filteredTasks.length === 0" class="empty">
-          {{ emptyText }}
-        </p>
+        <p v-if="filteredTasks.length === 0" class="empty">{{ emptyText }}</p>
       </div>
 
       <footer class="footer">
@@ -347,24 +469,14 @@ onBeforeUnmount(() => {
 
     <div v-if="toastOpen" class="toast" role="status" aria-live="polite">
       <span class="toastText">{{ toastMessage }}</span>
-      <button class="toastBtn" type="button" @click="undoDelete" :disabled="!canUndo">Undo</button>
+      <button class="toastBtn" type="button" @click="undoDelete" :disabled="!pendingDelete">Undo</button>
       <button class="toastBtn ghost" type="button" @click="closeToast">Close</button>
     </div>
   </section>
 </template>
 
 <style scoped>
-.wrap {
-  width: min(960px, 92vw);
-  padding: 24px;
-}
-
-@media (min-width: 1100px) {
-  .wrap {
-    width: min(1100px, 86vw);
-  }
-}
-
+.wrap { width: min(960px, 92vw); padding: 24px; }
 .card {
   background: var(--color-background-soft);
   border: 1px solid var(--color-border);
@@ -372,449 +484,92 @@ onBeforeUnmount(() => {
   overflow: hidden;
   box-shadow: var(--shadow, 0 18px 45px rgba(0, 0, 0, 0.12));
 }
+.header { padding: 22px 22px 14px; border-bottom: 1px solid var(--color-border); background: var(--color-background); }
+.headerTop { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.title { font-size: 20px; font-weight: 900; letter-spacing: -0.02em; color: var(--color-heading); }
+.subtitle { margin-top: 6px; font-size: 13px; color: var(--color-text); opacity: 0.85; }
+.pill { border: 1px solid var(--color-border); background: var(--color-background-soft); color: var(--color-text); padding: 6px 10px; border-radius: 999px; font-size: 12px; }
 
-.header {
-  padding: 22px 22px 14px;
-  border-bottom: 1px solid var(--color-border);
-  background: var(--color-background);
-}
+.backend { margin-top: 12px; display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-background-soft); }
+.backend.loading { opacity: 0.92; }
+.backend.ok { border-color: rgba(66, 184, 131, 0.25); }
+.backend.error { border-color: rgba(239, 68, 68, 0.25); }
 
-.headerTop {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
+.badge { font-size: 12px; font-weight: 800; padding: 4px 8px; border-radius: 999px; border: 1px solid var(--color-border); background: var(--color-background); color: var(--color-text); }
+.statusRow { display: inline-flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.backendText { font-size: 13px; color: var(--color-text); opacity: 0.9; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-.title {
-  font-size: 20px;
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  color: var(--color-heading);
-}
+.dot { width: 10px; height: 10px; border-radius: 999px; background: rgba(255, 255, 255, 0.35); box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06); }
+.backend.ok .dot { background: var(--accent); box-shadow: 0 0 0 3px rgba(66, 184, 131, 0.22); }
+.backend.error .dot { background: #ef4444; box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18); }
 
-.subtitle {
-  margin-top: 6px;
-  font-size: 13px;
-  color: var(--color-text);
-  opacity: 0.85;
-}
+.spinner { width: 14px; height: 14px; border-radius: 999px; border: 2px solid rgba(255, 255, 255, 0.18); border-top-color: var(--accent); animation: spin 0.7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 
-.pill {
-  border: 1px solid var(--color-border);
-  background: var(--color-background-soft);
-  color: var(--color-text);
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-}
+.retry { margin-left: auto; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: transparent; color: var(--color-text); cursor: pointer; font-weight: 700; font-size: 12px; }
+.retry:hover { border-color: var(--color-border-hover); }
+.retry:disabled { opacity: 0.55; cursor: not-allowed; }
 
-/* Backend badge */
-.backend {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background-soft);
-}
+.composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px 22px; }
+.input { width: 100%; padding: 12px 12px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-background); color: var(--color-text); outline: none; transition: border-color 0.15s ease, transform 0.15s ease; }
+.input:focus { border-color: var(--color-border-hover); transform: translateY(-1px); }
 
-.backend.loading {
-  opacity: 0.92;
-}
-.backend.ok {
-  border-color: rgba(66, 184, 131, 0.25);
-}
-.backend.error {
-  border-color: rgba(239, 68, 68, 0.25);
-}
+.btn { padding: 12px 14px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--accent); color: var(--accent-contrast); cursor: pointer; font-weight: 900; transition: transform 0.15s ease, opacity 0.15s ease; }
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: translateY(0); opacity: 0.92; }
 
-.badge {
-  font-size: 12px;
-  font-weight: 800;
-  padding: 4px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  color: var(--color-text);
-}
+.filters { display: flex; flex-wrap: wrap; gap: 10px; padding: 0 22px 14px; }
+.chip { border: 1px solid var(--color-border); background: transparent; color: var(--color-text); padding: 8px 10px; border-radius: 999px; cursor: pointer; font-size: 13px; display: inline-flex; align-items: center; gap: 8px; transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease; }
+.chip:hover { border-color: var(--color-border-hover); transform: translateY(-1px); }
+.chip.active { background: var(--color-background); border-color: rgba(66, 184, 131, 0.28); }
+.chip:disabled { opacity: 0.5; cursor: not-allowed; }
+.chipCount { border: 1px solid var(--color-border); background: var(--color-background); padding: 2px 8px; border-radius: 999px; font-size: 12px; opacity: 0.9; }
+.chip.danger { margin-left: auto; }
 
-.statusRow {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  flex: 1;
-}
+.list { padding: 6px 10px 10px; }
+.ul { list-style: none; display: grid; gap: 10px; padding: 0 12px 12px; margin: 0; }
 
-.backendText {
-  font-size: 13px;
-  color: var(--color-text);
-  opacity: 0.9;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
+.item { display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: center; padding: 12px 12px; border-radius: 14px; border: 1px solid var(--color-border); background: var(--color-background); transition: transform 0.15s ease, border-color 0.15s ease; }
+.item:hover { transform: translateY(-1px); border-color: var(--color-border-hover); }
 
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.35);
-  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
-}
-.backend.ok .dot {
-  background: var(--accent);
-  box-shadow: 0 0 0 3px rgba(66, 184, 131, 0.22);
-}
-.backend.error .dot {
-  background: #ef4444;
-  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
-}
+.check { border: 0; background: transparent; cursor: pointer; padding: 0; }
+.box { width: 22px; height: 22px; border-radius: 7px; border: 1px solid var(--color-border); background: var(--color-background-soft); display: inline-block; position: relative; transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease; }
+.item:active .box { transform: scale(0.96); }
+.item.done .box { border-color: var(--color-border-hover); background: rgba(66, 184, 131, 0.18); }
+.item.done .box::after { content: "✓"; position: absolute; inset: 0; display: grid; place-items: center; font-size: 14px; font-weight: 900; color: var(--color-text); animation: pop 0.16s ease; }
+@keyframes pop { from { transform: scale(0.75); opacity: 0.6; } to { transform: scale(1); opacity: 1; } }
 
-.spinner {
-  width: 14px;
-  height: 14px;
-  border-radius: 999px;
-  border: 2px solid rgba(255, 255, 255, 0.18);
-  border-top-color: var(--accent);
-  animation: spin 0.7s linear infinite;
-}
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
+.content { min-width: 0; cursor: text; }
+.text { font-weight: 800; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.item.done .text { text-decoration: line-through; opacity: 0.65; }
+.meta { margin-top: 2px; font-size: 12px; opacity: 0.75; color: var(--color-text); }
 
-.retry {
-  margin-left: auto;
-  padding: 7px 10px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
-  cursor: pointer;
-  font-weight: 700;
-  font-size: 12px;
-}
-.retry:hover {
-  border-color: var(--color-border-hover);
-}
-.retry:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
+.editInput { width: 100%; padding: 10px 10px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-background); color: var(--color-text); outline: none; }
+.editInput:focus { border-color: var(--color-border-hover); }
 
-/* Composer */
-.composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
-  padding: 16px 22px;
-}
+.iconBtn { border: 1px solid var(--color-border); background: transparent; color: var(--color-text); width: 38px; height: 38px; border-radius: 12px; cursor: pointer; transition: transform 0.15s ease, border-color 0.15s ease; }
+.iconBtn:hover { transform: translateY(-1px); border-color: var(--color-border-hover); }
 
-.input {
-  width: 100%;
-  padding: 12px 12px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  color: var(--color-text);
-  outline: none;
-  transition: border-color 0.15s ease, transform 0.15s ease;
-}
-.input:focus {
-  border-color: var(--color-border-hover);
-  transform: translateY(-1px);
-}
+.empty { padding: 16px 12px 20px; text-align: center; color: var(--color-text); opacity: 0.75; }
 
-.btn {
-  padding: 12px 14px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  cursor: pointer;
-  font-weight: 900;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
-.btn:hover {
-  transform: translateY(-1px);
-}
-.btn:active {
-  transform: translateY(0);
-  opacity: 0.92;
-}
+.footer { display: flex; justify-content: space-between; gap: 10px; padding: 14px 22px 18px; border-top: 1px solid var(--color-border); background: var(--color-background-soft); }
+.muted { font-size: 12px; color: var(--color-text); opacity: 0.75; }
 
-/* Filters */
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  padding: 0 22px 14px;
-}
-
-.chip {
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
-  padding: 8px 10px;
-  border-radius: 999px;
-  cursor: pointer;
-  font-size: 13px;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
-}
-.chip:hover {
-  border-color: var(--color-border-hover);
-  transform: translateY(-1px);
-}
-.chip.active {
-  background: var(--color-background);
-  border-color: rgba(66, 184, 131, 0.28);
-}
-.chip:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.chipCount {
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  padding: 2px 8px;
-  border-radius: 999px;
-  font-size: 12px;
-  opacity: 0.9;
-}
-.chip.danger {
-  margin-left: auto;
-}
-
-/* List */
-.list {
-  padding: 6px 10px 10px;
-}
-
-.ul {
-  list-style: none;
-  display: grid;
-  gap: 10px;
-  padding: 0 12px 12px;
-  margin: 0;
-}
-
-.item {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
-  align-items: center;
-  padding: 12px 12px;
-  border-radius: 14px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  transition: transform 0.15s ease, border-color 0.15s ease;
-}
-.item:hover {
-  transform: translateY(-1px);
-  border-color: var(--color-border-hover);
-}
-
-.check {
-  border: 0;
-  background: transparent;
-  cursor: pointer;
-  padding: 0;
-}
-
-.box {
-  width: 22px;
-  height: 22px;
-  border-radius: 7px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background-soft);
-  display: inline-block;
-  position: relative;
-  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
-}
-.item:active .box {
-  transform: scale(0.96);
-}
-
-.item.done .box {
-  border-color: var(--color-border-hover);
-  background: rgba(66, 184, 131, 0.18);
-}
-.item.done .box::after {
-  content: "✓";
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  font-size: 14px;
-  font-weight: 900;
-  color: var(--color-text);
-  animation: pop 0.16s ease;
-}
-@keyframes pop {
-  from {
-    transform: scale(0.75);
-    opacity: 0.6;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-.content {
-  min-width: 0;
-  cursor: text;
-}
-
-.text {
-  font-weight: 800;
-  color: var(--color-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.item.done .text {
-  text-decoration: line-through;
-  opacity: 0.65;
-}
-
-.meta {
-  margin-top: 2px;
-  font-size: 12px;
-  opacity: 0.75;
-  color: var(--color-text);
-}
-
-.editInput {
-  width: 100%;
-  padding: 10px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  color: var(--color-text);
-  outline: none;
-}
-.editInput:focus {
-  border-color: var(--color-border-hover);
-}
-
-.iconBtn {
-  border: 1px solid var(--color-border);
-  background: transparent;
-  color: var(--color-text);
-  width: 38px;
-  height: 38px;
-  border-radius: 12px;
-  cursor: pointer;
-  transition: transform 0.15s ease, border-color 0.15s ease;
-}
-.iconBtn:hover {
-  transform: translateY(-1px);
-  border-color: var(--color-border-hover);
-}
-
-.empty {
-  padding: 16px 12px 20px;
-  text-align: center;
-  color: var(--color-text);
-  opacity: 0.75;
-}
-
-/* Footer */
-.footer {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 22px 18px;
-  border-top: 1px solid var(--color-border);
-  background: var(--color-background-soft);
-}
-
-.muted {
-  font-size: 12px;
-  color: var(--color-text);
-  opacity: 0.75;
-}
-
-/* Toast */
 .toast {
-  position: fixed;
-  left: 50%;
-  bottom: 18px;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  padding: 12px 14px;
-  border-radius: 14px;
-  border: 1px solid var(--color-border);
-  background: var(--color-background);
-  box-shadow: var(--shadow, 0 18px 45px rgba(0, 0, 0, 0.12));
-  max-width: min(720px, 92vw);
-  z-index: 50;
+  position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  display: flex; gap: 10px; align-items: center;
+  padding: 12px 14px; border-radius: 14px; border: 1px solid var(--color-border);
+  background: var(--color-background); box-shadow: var(--shadow, 0 18px 45px rgba(0, 0, 0, 0.12));
+  max-width: min(720px, 92vw); z-index: 50;
 }
+.toastText { color: var(--color-text); opacity: 0.92; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.toastBtn { padding: 8px 10px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--accent); color: var(--accent-contrast); cursor: pointer; font-weight: 900; font-size: 12px; }
+.toastBtn.ghost { background: transparent; color: var(--color-text); }
+.toastBtn:hover { border-color: var(--color-border-hover); }
+.toastBtn:disabled { opacity: 0.55; cursor: not-allowed; }
 
-.toastText {
-  color: var(--color-text);
-  opacity: 0.92;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+.srOnly { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
-.toastBtn {
-  padding: 8px 10px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  cursor: pointer;
-  font-weight: 900;
-  font-size: 12px;
-}
-.toastBtn.ghost {
-  background: transparent;
-  color: var(--color-text);
-}
-
-.toastBtn:hover {
-  border-color: var(--color-border-hover);
-}
-.toastBtn:disabled {
-  opacity: 0.55;
-  cursor: not-allowed;
-}
-
-/* A11y */
-.srOnly {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
-}
-
-/* Animations */
-.fade-enter-active,
-.fade-leave-active {
-  transition: all 0.18s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-  transform: translateY(6px);
-}
+.fade-enter-active, .fade-leave-active { transition: all 0.18s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; transform: translateY(6px); }
 </style>
