@@ -13,6 +13,13 @@ type Task = {
   createdAt: number; // ms timestamp
 };
 
+type RawTask = {
+  id?: unknown;
+  title?: unknown;
+  done?: unknown;
+  createdAt?: unknown;
+};
+
 const STORAGE_KEY = "taskbuddy_tasks_cache_v1";
 
 // Base URL (lokal / prod über .env)
@@ -41,7 +48,7 @@ let toastTimer: number | null = null;
 
 // Für Undo: wir löschen erst nach Delay wirklich im Backend
 let pendingDeleteTimer: number | null = null;
-let pendingDelete: { task: Task; index: number } | null = null;
+const pendingDelete = ref<{ task: Task; index: number } | null>(null);
 
 // ===== Helpers =====
 function uid() {
@@ -72,27 +79,33 @@ function closeToast() {
 }
 
 // cache (falls Backend mal down ist)
-function saveCache() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value));
-}
 function loadCache(): Task[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as Task[];
+
+    const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
+
     return parsed
-      .filter((t) => t && typeof t.id === "number" && typeof t.title === "string")
+      .filter((x): x is RawTask => typeof x === "object" && x !== null)
+      .filter((t) => typeof t.id === "number" && typeof t.title === "string")
       .map((t) => ({
-        id: t.id,
+        id: t.id as number,
         title: String(t.title),
         done: Boolean(t.done),
-        createdAt: typeof (t as any).createdAt === "number" ? (t as any).createdAt : Date.now(),
+        createdAt: typeof t.createdAt === "number" ? t.createdAt : Date.now(),
       }));
   } catch {
     return [];
   }
 }
+
+function saveCache() {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value));
+}
+
+
 
 // ===== API =====
 async function apiGetTodos(): Promise<Task[]> {
@@ -220,19 +233,23 @@ async function toggleDone(id: number) {
   }
 }
 
-function scheduleBackendDelete(id: number) {
-  // in case another delete is pending, execute it now
+function scheduleBackendDelete() {
+  // falls schon was pending ist → alten Timer killen
   if (pendingDeleteTimer) {
     window.clearTimeout(pendingDeleteTimer);
     pendingDeleteTimer = null;
   }
 
   pendingDeleteTimer = window.setTimeout(async () => {
-    if (!pendingDelete) return;
-    const realId = pendingDelete.task.id;
-    pendingDelete = null;
+    const snapshot = pendingDelete.value;
+    if (!snapshot) return;
 
+    // jetzt finalisieren (Undo-Fenster ist vorbei)
+    pendingDelete.value = null;
+
+    const realId = snapshot.task.id;
     if (realId < 0) return; // war nur temp
+
     try {
       await apiDeleteTodo(realId);
     } catch {
@@ -241,22 +258,25 @@ function scheduleBackendDelete(id: number) {
   }, 5000);
 }
 
+
 function deleteTask(id: number) {
   const idx = tasks.value.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
-  const removed = tasks.value[idx];
-  tasks.value.splice(idx, 1);
+  // splice gibt ein Array zurück -> removed ist Task | undefined
+  const [removed] = tasks.value.splice(idx, 1);
+  if (!removed) return; // <- TS fix: jetzt garantiert Task
 
-  // pending delete merken + delay (Undo möglich)
-  pendingDelete = { task: removed, index: idx };
-  scheduleBackendDelete(id);
+  pendingDelete.value = { task: removed, index: idx };
+  scheduleBackendDelete();
 
   showToast(`Task gelöscht: “${removed.title}” (Undo möglich)`);
 }
 
+
 function undoDelete() {
-  if (!pendingDelete) return;
+  const snapshot = pendingDelete.value;
+  if (!snapshot) return;
 
   // cancel backend delete
   if (pendingDeleteTimer) {
@@ -264,11 +284,12 @@ function undoDelete() {
     pendingDeleteTimer = null;
   }
 
-  tasks.value.splice(pendingDelete.index, 0, pendingDelete.task);
-  pendingDelete = null;
+  tasks.value.splice(snapshot.index, 0, snapshot.task);
+  pendingDelete.value = null;
 
   showToast("Wiederhergestellt ✅");
 }
+
 
 async function commitEdit(task: Task) {
   const nextTitle = editValue.value.trim();
@@ -358,7 +379,8 @@ onMounted(async () => {
   window.addEventListener("keydown", onKeydown);
 });
 
-watch(tasks, () => saveCache(), { deep: true });
+watch(tasks, saveCache, { deep: true });
+
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
