@@ -174,7 +174,6 @@ function commitEdit(task: Task) {
     cancelEdit();
     return;
   }
-
   task.title = nextTitle;
   cancelEdit();
 }
@@ -231,7 +230,6 @@ onMounted(() => {
 
 watch(tasks, () => saveTasks(), { deep: true });
 
-// ESC closes toast + cancels edit
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     if (editingId.value !== null) cancelEdit();
@@ -257,7 +255,6 @@ onBeforeUnmount(() => {
 
         <p class="subtitle">Professionell organisiert — schnell, clean, zuverlässig.</p>
 
-        <!-- Smart Backend Badge -->
         <div class="backend" :class="backendStatus">
           <span class="badge">Backend</span>
 
@@ -326,15 +323,14 @@ onBeforeUnmount(() => {
                   @blur="commitEdit(task)"
                 />
               </template>
+
               <template v-else>
                 <p class="text" :title="task.title">{{ task.title }}</p>
                 <p class="meta">{{ task.done ? "Erledigt" : "Offen" }} • {{ formatDate(task.createdAt) }}</p>
               </template>
             </div>
 
-            <button class="iconBtn" type="button" @click="deleteTask(task.id)" aria-label="delete">
-              🗑
-            </button>
+            <button class="iconBtn" type="button" @click="deleteTask(task.id)" aria-label="delete">🗑</button>
           </li>
         </transition-group>
 
@@ -349,7 +345,6 @@ onBeforeUnmount(() => {
       </footer>
     </div>
 
-    <!-- Undo Toast -->
     <div v-if="toastOpen" class="toast" role="status" aria-live="polite">
       <span class="toastText">{{ toastMessage }}</span>
       <button class="toastBtn" type="button" @click="undoDelete" :disabled="!canUndo">Undo</button>
@@ -359,5 +354,467 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* Dein CSS bleibt 1:1 gleich – du kannst deinen bestehenden Styleblock 그대로 lassen */
+.wrap {
+  width: min(960px, 92vw);
+  padding: 24px;
+}
+
+@media (min-width: 1100px) {
+  .wrap {
+    width: min(1100px, 86vw);
+  }
+}
+
+.card {
+  background: var(--color-background-soft);
+  border: 1px solid var(--color-border);
+  border-radius: 18px;
+  overflow: hidden;
+  box-shadow: var(--shadow, 0 18px 45px rgba(0, 0, 0, 0.12));
+}
+
+.header {
+  padding: 22px 22px 14px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-background);
+}
+
+.headerTop {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.title {
+  font-size: 20px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  color: var(--color-heading);
+}
+
+.subtitle {
+  margin-top: 6px;
+  font-size: 13px;
+  color: var(--color-text);
+  opacity: 0.85;
+}
+
+.pill {
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+  color: var(--color-text);
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+}
+
+/* Backend badge */
+.backend {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+}
+
+.backend.loading {
+  opacity: 0.92;
+}
+.backend.ok {
+  border-color: rgba(66, 184, 131, 0.25);
+}
+.backend.error {
+  border-color: rgba(239, 68, 68, 0.25);
+}
+
+.badge {
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text);
+}
+
+.statusRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+
+.backendText {
+  font-size: 13px;
+  color: var(--color-text);
+  opacity: 0.9;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.35);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.06);
+}
+.backend.ok .dot {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(66, 184, 131, 0.22);
+}
+.backend.error .dot {
+  background: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.18);
+}
+
+.spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.retry {
+  margin-left: auto;
+  padding: 7px 10px;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: 700;
+  font-size: 12px;
+}
+.retry:hover {
+  border-color: var(--color-border-hover);
+}
+.retry:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Composer */
+.composer {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 16px 22px;
+}
+
+.input {
+  width: 100%;
+  padding: 12px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.input:focus {
+  border-color: var(--color-border-hover);
+  transform: translateY(-1px);
+}
+
+.btn {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+  font-weight: 900;
+  transition: transform 0.15s ease, opacity 0.15s ease;
+}
+.btn:hover {
+  transform: translateY(-1px);
+}
+.btn:active {
+  transform: translateY(0);
+  opacity: 0.92;
+}
+
+/* Filters */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 0 22px 14px;
+}
+
+.chip {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  padding: 8px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  transition: border-color 0.15s ease, transform 0.15s ease, background 0.15s ease;
+}
+.chip:hover {
+  border-color: var(--color-border-hover);
+  transform: translateY(-1px);
+}
+.chip.active {
+  background: var(--color-background);
+  border-color: rgba(66, 184, 131, 0.28);
+}
+.chip:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chipCount {
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  opacity: 0.9;
+}
+.chip.danger {
+  margin-left: auto;
+}
+
+/* List */
+.list {
+  padding: 6px 10px 10px;
+}
+
+.ul {
+  list-style: none;
+  display: grid;
+  gap: 10px;
+  padding: 0 12px 12px;
+  margin: 0;
+}
+
+.item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.item:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-hover);
+}
+
+.check {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  padding: 0;
+}
+
+.box {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+  display: inline-block;
+  position: relative;
+  transition: transform 0.12s ease, background 0.15s ease, border-color 0.15s ease;
+}
+.item:active .box {
+  transform: scale(0.96);
+}
+
+.item.done .box {
+  border-color: var(--color-border-hover);
+  background: rgba(66, 184, 131, 0.18);
+}
+.item.done .box::after {
+  content: "✓";
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: 14px;
+  font-weight: 900;
+  color: var(--color-text);
+  animation: pop 0.16s ease;
+}
+@keyframes pop {
+  from {
+    transform: scale(0.75);
+    opacity: 0.6;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.content {
+  min-width: 0;
+  cursor: text;
+}
+
+.text {
+  font-weight: 800;
+  color: var(--color-text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item.done .text {
+  text-decoration: line-through;
+  opacity: 0.65;
+}
+
+.meta {
+  margin-top: 2px;
+  font-size: 12px;
+  opacity: 0.75;
+  color: var(--color-text);
+}
+
+.editInput {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text);
+  outline: none;
+}
+.editInput:focus {
+  border-color: var(--color-border-hover);
+}
+
+.iconBtn {
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  cursor: pointer;
+  transition: transform 0.15s ease, border-color 0.15s ease;
+}
+.iconBtn:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-hover);
+}
+
+.empty {
+  padding: 16px 12px 20px;
+  text-align: center;
+  color: var(--color-text);
+  opacity: 0.75;
+}
+
+/* Footer */
+.footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-background-soft);
+}
+
+.muted {
+  font-size: 12px;
+  color: var(--color-text);
+  opacity: 0.75;
+}
+
+/* Toast */
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 18px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  box-shadow: var(--shadow, 0 18px 45px rgba(0, 0, 0, 0.12));
+  max-width: min(720px, 92vw);
+  z-index: 50;
+}
+
+.toastText {
+  color: var(--color-text);
+  opacity: 0.92;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.toastBtn {
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  cursor: pointer;
+  font-weight: 900;
+  font-size: 12px;
+}
+.toastBtn.ghost {
+  background: transparent;
+  color: var(--color-text);
+}
+
+.toastBtn:hover {
+  border-color: var(--color-border-hover);
+}
+.toastBtn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* A11y */
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Animations */
+.fade-enter-active,
+.fade-leave-active {
+  transition: all 0.18s ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+  transform: translateY(6px);
+}
 </style>
