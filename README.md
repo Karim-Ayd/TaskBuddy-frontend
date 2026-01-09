@@ -1,54 +1,38 @@
-# TaskBuddy-frontend
+TaskBuddy2
+TaskBuddy ist eine minimalistische, aber leistungsstarke Web-App zur Verwaltung von Aufgaben. Teammitglieder: Karim Ayada & Rohat Seran
 
-This template should help get you started developing with Vue 3 in Vite.
+Features:
 
-## Recommended IDE Setup
+🆕 Task anlegen: Neue Aufgabe eingeben + Add
 
-[VS Code](https://code.visualstudio.com/) + [Vue (Official)](https://marketplace.visualstudio.com/items?itemName=Vue.volar) (and disable Vetur).
+📋 Tasks anzeigen: Liste aller Aufgaben wird gerendert
 
-## Recommended Browser Setup
+✅ Task erledigt/unerledigt markieren: Toggle zwischen Offen ↔ Erledigt
 
-- Chromium-based browsers (Chrome, Edge, Brave, etc.):
-  - [Vue.js devtools](https://chromewebstore.google.com/detail/vuejs-devtools/nhdogjmejiglipccpnnnanhbledajbpd) 
-  - [Turn on Custom Object Formatter in Chrome DevTools](http://bit.ly/object-formatters)
-- Firefox:
-  - [Vue.js devtools](https://addons.mozilla.org/en-US/firefox/addon/vue-js-devtools/)
-  - [Turn on Custom Object Formatter in Firefox DevTools](https://fxdx.dev/firefox-devtools-custom-object-formatters/)
+🗑️ Task löschen: Einzelne Aufgabe entfernen
 
-## Type Support for `.vue` Imports in TS
+✏️ Task bearbeiten (Inline-Edit): Doppelklick zum Umbenennen + speichern/abbrechen
 
-TypeScript cannot handle type information for `.vue` imports by default, so we replace the `tsc` CLI with `vue-tsc` for type checking. In editors, we need [Volar](https://marketplace.visualstudio.com/items?itemName=Vue.volar) to make the TypeScript language service aware of `.vue` types.
+🔎 Filter: Alle: Alle Tasks anzeigen
 
-## Customize configuration
+🟡 Filter: Offen (Active): Nur offene Tasks anzeigen
 
-See [Vite Configuration Reference](https://vite.dev/config/).
+🟢 Filter: Erledigt (Done): Nur erledigte Tasks anzeigen
 
-## Project Setup
+🧹 „Clear done“: Alle erledigten Tasks auf einmal löschen
 
-```sh
-npm install
-```
+🔢 Live-Zähler: Anzeige wie viele offen / erledigt sind (z.B. „1 offen • 2 erledigt“)
 
-### Compile and Hot-Reload for Development
+🏷️ Status-Pill oben: Schneller Überblick „X offen“
 
-```sh
-npm run dev
-```
+🌐 Backend-Status Anzeige: „Connecting… / Online / Offline“ im Header
 
-### Type-Check, Compile and Minify for Production
+🔁 Retry-Button: Erneut verbinden, falls Backend nicht erreichbar
 
-```sh
-npm run build
-```
+🚫 Validierung: Leere/ungültige Eingaben werden nicht als Task gespeichert
 
-### Run Unit Tests with [Vitest](https://vitest.dev/)
+🕒 Erstellungsdatum: Anzeige des Datums pro Task (createdAt)
 
-```sh
-npm run test:unit
-```
+🌙 Dark Mode: Umschaltbares Design (Hell/Dunkel) für bessere Lesbarkeit am Abend
 
-### Lint with [ESLint](https://eslint.org/)
-
-```sh
-npm run lint
-```
+↩️ Undo (Rückgängig): Letzte Aktion (z. B. Delete oder Done/Undone) kann innerhalb kurzer Zeit rückgängig gemacht werden
