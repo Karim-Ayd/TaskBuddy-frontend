@@ -31,6 +31,7 @@ const PING_URL = `${API_BASE}/TaskBuddy`;
 const tasks = ref<Task[]>([]);
 const newTask = ref("");
 const filter = ref<Filter>("all");
+const search = ref("");
 
 // Backend badge
 const backendStatus = ref<BackendStatus>("loading");
@@ -105,8 +106,6 @@ function saveCache() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(tasks.value));
 }
 
-
-
 // ===== API =====
 async function apiGetTodos(): Promise<Task[]> {
   const res = await fetch(TODOS_URL, { method: "GET" });
@@ -128,7 +127,12 @@ async function apiCreateTodo(payload: Omit<Task, "id">): Promise<Task> {
   });
   if (!res.ok) throw new Error(`POST failed (${res.status})`);
   const t = (await res.json()) as { id: number; title: string; done: boolean; createdAt?: number | null };
-  return { id: t.id, title: t.title, done: t.done, createdAt: typeof t.createdAt === "number" ? t.createdAt : payload.createdAt };
+  return {
+    id: t.id,
+    title: t.title,
+    done: t.done,
+    createdAt: typeof t.createdAt === "number" ? t.createdAt : payload.createdAt,
+  };
 }
 
 async function apiUpdateTodo(id: number, patch: Partial<Pick<Task, "title" | "done">>): Promise<Task> {
@@ -258,21 +262,19 @@ function scheduleBackendDelete() {
   }, 5000);
 }
 
-
 function deleteTask(id: number) {
   const idx = tasks.value.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
   // splice gibt ein Array zurück -> removed ist Task | undefined
   const [removed] = tasks.value.splice(idx, 1);
-  if (!removed) return; // <- TS fix: jetzt garantiert Task
+  if (!removed) return; // TS fix
 
   pendingDelete.value = { task: removed, index: idx };
   scheduleBackendDelete();
 
   showToast(`Task gelöscht: “${removed.title}” (Undo möglich)`);
 }
-
 
 function undoDelete() {
   const snapshot = pendingDelete.value;
@@ -289,7 +291,6 @@ function undoDelete() {
 
   showToast("Wiederhergestellt ✅");
 }
-
 
 async function commitEdit(task: Task) {
   const nextTitle = editValue.value.trim();
@@ -323,7 +324,6 @@ async function clearCompleted() {
   tasks.value = tasks.value.filter((t) => !t.done);
 
   try {
-    // delete done in backend (serial für simplicity)
     for (const t of doneTasks) {
       if (t.id > 0) await apiDeleteTodo(t.id);
     }
@@ -353,22 +353,34 @@ const completed = computed(() => tasks.value.filter((t) => t.done).length);
 const hasCompleted = computed(() => completed.value > 0);
 
 const filteredTasks = computed(() => {
-  if (filter.value === "active") return tasks.value.filter((t) => !t.done);
-  if (filter.value === "done") return tasks.value.filter((t) => t.done);
-  return tasks.value;
+  const q = search.value.trim().toLowerCase();
+
+  // erst Status-Filter
+  let base =
+    filter.value === "active"
+      ? tasks.value.filter((t) => !t.done)
+      : filter.value === "done"
+        ? tasks.value.filter((t) => t.done)
+        : tasks.value;
+
+  // dann Suche
+  if (!q) return base;
+  return base.filter((t) => t.title.toLowerCase().includes(q));
 });
 
 const emptyText = computed(() => {
+  if (search.value.trim()) return "Keine Treffer 🔎";
   if (filter.value === "active") return "Keine offenen Tasks ✨";
   if (filter.value === "done") return "Noch nichts erledigt — let’s go 💪";
   return "Noch keine Tasks — leg los 🚀";
 });
 
-// ESC cancels edit / closes toast
+// ESC cancels edit / closes toast / clears search
 function onKeydown(e: KeyboardEvent) {
   if (e.key === "Escape") {
     if (editingId.value !== null) cancelEdit();
     else if (toastOpen.value) closeToast();
+    else if (search.value) search.value = "";
   }
 }
 
@@ -380,7 +392,6 @@ onMounted(async () => {
 });
 
 watch(tasks, saveCache, { deep: true });
-
 
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydown);
@@ -418,6 +429,20 @@ onBeforeUnmount(() => {
           </button>
         </div>
       </header>
+
+      <!-- ✅ SUCHLEISTE -->
+      <div class="searchRow">
+        <input
+          v-model="search"
+          class="searchInput"
+          type="text"
+          autocomplete="off"
+          placeholder="🔎 Suche nach Tasks…"
+        />
+        <button class="searchClear" type="button" @click="search = ''" :disabled="!search">
+          Clear
+        </button>
+      </div>
 
       <div class="composer">
         <label class="srOnly" for="newTask">Neue Aufgabe</label>
@@ -531,6 +556,46 @@ onBeforeUnmount(() => {
 .retry { margin-left: auto; padding: 7px 10px; border-radius: 10px; border: 1px solid var(--color-border); background: transparent; color: var(--color-text); cursor: pointer; font-weight: 700; font-size: 12px; }
 .retry:hover { border-color: var(--color-border-hover); }
 .retry:disabled { opacity: 0.55; cursor: not-allowed; }
+
+/* ✅ SUCHLEISTE */
+.searchRow {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  padding: 16px 22px 0;
+}
+.searchInput {
+  width: 100%;
+  padding: 12px 12px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: var(--color-background);
+  color: var(--color-text);
+  outline: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+.searchInput:focus {
+  border-color: var(--color-border-hover);
+  transform: translateY(-1px);
+}
+.searchClear {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
+  background: transparent;
+  color: var(--color-text);
+  cursor: pointer;
+  font-weight: 900;
+  transition: transform 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+}
+.searchClear:hover {
+  transform: translateY(-1px);
+  border-color: var(--color-border-hover);
+}
+.searchClear:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
 
 .composer { display: grid; grid-template-columns: 1fr auto; gap: 10px; padding: 16px 22px; }
 .input { width: 100%; padding: 12px 12px; border-radius: 12px; border: 1px solid var(--color-border); background: var(--color-background); color: var(--color-text); outline: none; transition: border-color 0.15s ease, transform 0.15s ease; }
