@@ -24,7 +24,7 @@ main {
   position: relative;
   isolation: isolate;
 
-  /* Premium background: subtle glow + base */
+  /* background: subtle glow + base */
   background:
     radial-gradient(
       800px 500px at 50% 20%,

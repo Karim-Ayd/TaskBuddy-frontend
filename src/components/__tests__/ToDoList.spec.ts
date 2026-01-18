@@ -53,7 +53,7 @@ async function waitFor(predicate: () => boolean, tries = 80) {
 }
 
 function getRenderedTitles(wrapper: ReturnType<typeof mount>): string[] {
-  // deine Task-Texte sind <p class="text">
+  // Task-Texte sind <p class="text">
   return wrapper.findAll("p.text").map((w) => w.text());
 }
 

@@ -224,7 +224,7 @@ async function toggleDone(id: number) {
   const prev = t.done;
   t.done = !t.done;
 
-  // temp ids nicht updaten (noch nicht gespeichert)
+  // temp ids nicht updaten
   if (id < 0) return;
 
   try {
@@ -266,7 +266,7 @@ function deleteTask(id: number) {
   const idx = tasks.value.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
-  // splice gibt ein Array zurück -> removed ist Task | undefined
+  // splice gibt Array zurück -> removed ist Task | undefined
   const [removed] = tasks.value.splice(idx, 1);
   if (!removed) return; // TS fix
 
