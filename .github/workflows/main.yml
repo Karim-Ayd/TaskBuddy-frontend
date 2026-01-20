@@ -1,25 +1,17 @@
-name: Frontend CI (npm + vitest)
+name: JavaScript CI with npm
 
-on:
-  push:
-  pull_request:
+on: [ push ]
 
 jobs:
-  test:
+  build:
     runs-on: ubuntu-latest
-
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Use Node.js 20 (LTS)
-        uses: actions/setup-node@v4
+      - uses: actions/checkout@v2
+      - name: Use node 24.11.0
+        uses: actions/setup-node@v2
         with:
-          node-version: 20
-
+          node-version: 24.11.0
       - name: Install dependencies
-        working-directory: TaskBuddy-frontend
         run: npm ci
-
-      - name: Run unit tests
-        working-directory: TaskBuddy-frontend
+      - name: Run tests
         run: npm run test:unit
